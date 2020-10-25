@@ -18,13 +18,14 @@ struct DataStatus {
 }
 
 extern "C" {
-    fn CreateProtoBridge(p_handle: *mut ProtoBridgeHandle) -> u32;
+    fn CreateProtoBridge(p_handle: &mut ProtoBridgeHandle) -> u32;
     fn DestroyProtoBridge(handle: ProtoBridgeHandle);
 
     fn QueryProtoBridgeDataStatus(handle: ProtoBridgeHandle) -> DataStatus;
     fn ClockProtoBridge(handle: ProtoBridgeHandle, p_input: *const u8, p_output: *mut u8);
 }
 
+#[derive(Debug)]
 pub struct ProtoBridge {
     handle: ProtoBridgeHandle,
     clocks: u64,
