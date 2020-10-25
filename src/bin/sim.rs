@@ -1,7 +1,7 @@
+use clap::Clap;
 use devsim::device::Device;
 use image::RgbaImage;
 use std::time::Duration;
-use clap::Clap;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -12,7 +12,7 @@ struct SimOptions {
     elf_path: String,
 
     /// Path to write out the framebuffer as a png
-    #[clap(short='o')]
+    #[clap(short = 'o')]
     framebuffer_path: Option<String>,
 }
 

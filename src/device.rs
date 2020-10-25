@@ -36,6 +36,7 @@ impl fmt::Display for DeviceError {
 
 impl error::Error for DeviceError {}
 
+#[derive(Debug)]
 pub struct Device {
     bridge: ProtoBridge,
 }
