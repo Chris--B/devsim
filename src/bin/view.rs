@@ -4,7 +4,7 @@ use ash::{
 };
 use imgui::{DrawCmd, DrawCmdParams};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Instant;
 use winit::{
     event::{
@@ -97,7 +97,7 @@ struct FrameState {
 impl FrameState {
     fn new(
         device: &VkDevice,
-        allocator: Weak<vk_mem::Allocator>,
+        allocator: AllocRef,
         command_pool: &VkCommandPool,
         descriptor_pool: &VkDescriptorPool,
         descriptor_set_layout: &VkDescriptorSetLayout,
@@ -109,9 +109,9 @@ impl FrameState {
         let cmd_buffer = command_pool.allocate_command_buffer(vk::CommandBufferLevel::PRIMARY)?;
 
         let rendering_finished_semaphore =
-            VkSemaphore::new(device.raw(), &vk::SemaphoreCreateInfo::default())?;
+            VkSemaphore::new(device.as_ref(), &vk::SemaphoreCreateInfo::default())?;
         let fence = VkFence::new(
-            device.raw(),
+            device.as_ref(),
             &vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED),
         )?;
 
@@ -142,7 +142,7 @@ impl FrameState {
         )?;
 
         let fb_image_view = VkImageView::new(
-            device.raw(),
+            device.as_ref(),
             &vk::ImageViewCreateInfo::builder()
                 .image(fb_image.raw())
                 .view_type(vk::ImageViewType::TYPE_2D)
@@ -166,7 +166,7 @@ impl FrameState {
                 ),
         )?;
         unsafe {
-            device.raw().upgrade().unwrap().update_descriptor_sets(
+            device.raw().update_descriptor_sets(
                 &[vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(0)
@@ -195,7 +195,7 @@ impl FrameState {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .build(),
             );
-            device.raw().upgrade().unwrap().update_descriptor_sets(
+            device.raw().update_descriptor_sets(
                 &[vk::WriteDescriptorSet::builder()
                     .dst_set(descriptor_set)
                     .dst_binding(2)
@@ -218,8 +218,8 @@ impl FrameState {
     }
 }
 
+#[allow(dead_code)]
 struct Renderer {
-    #[allow(dead_code)]
     imgui_renderer: ImguiRenderer,
     frame_states: Vec<FrameState>,
     fb_upload_buffer: VkBuffer,
@@ -227,18 +227,18 @@ struct Renderer {
     image_available_semaphores: Vec<VkSemaphore>,
     framebuffers: Vec<VkFramebuffer>,
     renderpass: VkRenderPass,
-    #[allow(dead_code)]
+
     cmd_pool: VkCommandPool,
-    #[allow(dead_code)]
+
     sampler: VkSampler,
     pipeline_layout: VkPipelineLayout,
-    #[allow(dead_code)]
+
     descriptor_set_layout: VkDescriptorSetLayout,
-    #[allow(dead_code)]
+
     descriptor_pool: VkDescriptorPool,
     gfx_pipeline: VkPipeline,
     imgui_pipeline: VkPipeline,
-    #[allow(dead_code)]
+
     pipeline_cache: VkPipelineCache,
     cur_frame_idx: usize,
     cur_swapchain_idx: usize,
@@ -276,16 +276,17 @@ impl Renderer {
 
         let allocator = Arc::new(vk_mem::Allocator::new(&vk_mem::AllocatorCreateInfo {
             physical_device,
-            device: (*device.raw().upgrade().unwrap()).clone(),
+            device: (*device.raw()).clone(),
             instance: instance.raw().clone(),
             flags: vk_mem::AllocatorCreateFlags::NONE,
             preferred_large_heap_block_size: 0,
             frame_in_use_count: 0,
             heap_size_limits: None,
         })?);
+        let alloc_ref = AllocRef(Arc::downgrade(&allocator));
 
         let pipeline_cache =
-            VkPipelineCache::new(device.raw(), &vk::PipelineCacheCreateInfo::default())?;
+            VkPipelineCache::new(device.as_ref(), &vk::PipelineCacheCreateInfo::default())?;
 
         let swapchain = VkSwapchain::new(
             &instance,
@@ -306,7 +307,7 @@ impl Renderer {
             .iter()
             .map(|image| {
                 VkImageView::new(
-                    device.raw(),
+                    device.as_ref(),
                     &vk::ImageViewCreateInfo::builder()
                         .image(*image)
                         .view_type(vk::ImageViewType::TYPE_2D)
@@ -333,7 +334,7 @@ impl Renderer {
             .collect::<Result<Vec<VkImageView>>>()?;
 
         let renderpass = VkRenderPass::new(
-            device.raw(),
+            device.as_ref(),
             &vk::RenderPassCreateInfo::builder()
                 .attachments(&[vk::AttachmentDescription::builder()
                     .format(surface_format.format)
@@ -358,7 +359,7 @@ impl Renderer {
             .iter()
             .map(|image_view| {
                 VkFramebuffer::new(
-                    device.raw(),
+                    device.as_ref(),
                     &vk::FramebufferCreateInfo::builder()
                         .render_pass(renderpass.raw())
                         .attachments(&[image_view.raw()])
@@ -370,14 +371,14 @@ impl Renderer {
             .collect::<Result<Vec<_>>>()?;
 
         let cmd_pool = VkCommandPool::new(
-            device.raw(),
+            device.as_ref(),
             &vk::CommandPoolCreateInfo::builder()
                 .queue_family_index(queue_family_index)
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
         )?;
 
         let sampler = VkSampler::new(
-            device.raw(),
+            device.as_ref(),
             &vk::SamplerCreateInfo::builder()
                 .mag_filter(vk::Filter::LINEAR)
                 .min_filter(vk::Filter::LINEAR)
@@ -391,7 +392,7 @@ impl Renderer {
         )?;
 
         let descriptor_set_layout = VkDescriptorSetLayout::new(
-            device.raw(),
+            device.as_ref(),
             &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&[
                 vk::DescriptorSetLayoutBinding::builder()
                     .binding(0)
@@ -420,7 +421,7 @@ impl Renderer {
         )?;
 
         let pipeline_layout = VkPipelineLayout::new(
-            device.raw(),
+            device.as_ref(),
             &vk::PipelineLayoutCreateInfo::builder()
                 .set_layouts(&[descriptor_set_layout.raw()])
                 .push_constant_ranges(&[vk::PushConstantRange::builder()
@@ -435,7 +436,7 @@ impl Renderer {
         )?;
 
         let descriptor_pool = VkDescriptorPool::new(
-            device.raw(),
+            device.as_ref(),
             &vk::DescriptorPoolCreateInfo::builder()
                 .max_sets(desired_image_count)
                 .pool_sizes(&[
@@ -484,7 +485,7 @@ impl Renderer {
         )?;
 
         let vert_module = VkShaderModule::new(
-            device.raw(),
+            device.as_ref(),
             &vk::ShaderModuleCreateInfo::builder().code(vert_result.as_binary()),
         )?;
 
@@ -497,7 +498,7 @@ impl Renderer {
         )?;
 
         let frag_module = VkShaderModule::new(
-            device.raw(),
+            device.as_ref(),
             &vk::ShaderModuleCreateInfo::builder().code(frag_result.as_binary()),
         )?;
 
@@ -571,7 +572,7 @@ impl Renderer {
         )?;
 
         let imgui_vert_module = VkShaderModule::new(
-            device.raw(),
+            device.as_ref(),
             &vk::ShaderModuleCreateInfo::builder().code(imgui_vert_result.as_binary()),
         )?;
 
@@ -584,7 +585,7 @@ impl Renderer {
         )?;
 
         let imgui_frag_module = VkShaderModule::new(
-            device.raw(),
+            device.as_ref(),
             &vk::ShaderModuleCreateInfo::builder().code(imgui_frag_result.as_binary()),
         )?;
 
@@ -683,13 +684,13 @@ impl Renderer {
         let image_available_semaphores = swapchain
             .images
             .iter()
-            .map(|_| VkSemaphore::new(device.raw(), &vk::SemaphoreCreateInfo::default()))
+            .map(|_| VkSemaphore::new(device.as_ref(), &vk::SemaphoreCreateInfo::default()))
             .collect::<Result<Vec<_>>>()?;
 
         let image_size_bytes = fb_width * fb_height * 4;
 
         let fb_upload_buffer = VkBuffer::new(
-            Arc::downgrade(&allocator),
+            alloc_ref.clone(),
             &ash::vk::BufferCreateInfo::builder()
                 .size((((image_size_bytes + 255) & !255) * desired_image_count) as u64)
                 .usage(vk::BufferUsageFlags::TRANSFER_SRC),
@@ -701,7 +702,7 @@ impl Renderer {
         )?;
 
         let frame_memory_buffer = VkBuffer::new(
-            Arc::downgrade(&allocator),
+            alloc_ref.clone(),
             &ash::vk::BufferCreateInfo::builder()
                 .size(FRAME_MEMORY_SIZE * (desired_image_count as u64))
                 .usage(vk::BufferUsageFlags::STORAGE_BUFFER),
@@ -712,14 +713,14 @@ impl Renderer {
             },
         )?;
 
-        let imgui_renderer = ImguiRenderer::new(&device, Arc::downgrade(&allocator), context)?;
+        let imgui_renderer = ImguiRenderer::new(&device, alloc_ref.clone(), context)?;
 
         let frame_states = swapchain_image_views
             .iter()
             .map(|_image_view| {
                 FrameState::new(
                     &device,
-                    Arc::downgrade(&allocator),
+                    alloc_ref.clone(),
                     &cmd_pool,
                     &descriptor_pool,
                     &descriptor_set_layout,
@@ -790,7 +791,7 @@ impl Renderer {
             .iter()
             .map(|image| {
                 VkImageView::new(
-                    self.device.raw(),
+                    self.device.as_ref(),
                     &vk::ImageViewCreateInfo::builder()
                         .image(*image)
                         .view_type(vk::ImageViewType::TYPE_2D)
@@ -820,7 +821,7 @@ impl Renderer {
             .iter()
             .map(|image_view| {
                 VkFramebuffer::new(
-                    self.device.raw(),
+                    self.device.as_ref(),
                     &vk::FramebufferCreateInfo::builder()
                         .render_pass(self.renderpass.raw())
                         .attachments(&[image_view.raw()])
@@ -860,8 +861,6 @@ impl Renderer {
             // Wait for the resources for this frame to become available
             self.device
                 .raw()
-                .upgrade()
-                .unwrap()
                 .wait_for_fences(&[frame_state.fence.raw()], true, u64::MAX)
                 .unwrap();
 
@@ -869,8 +868,6 @@ impl Renderer {
 
             self.device
                 .raw()
-                .upgrade()
-                .unwrap()
                 .begin_command_buffer(cmd_buffer, &vk::CommandBufferBeginInfo::default())
                 .unwrap();
 
@@ -882,7 +879,7 @@ impl Renderer {
         let frame_state = self.get_cur_frame_state();
         let framebuffer = &self.framebuffers[self.cur_swapchain_idx];
         unsafe {
-            self.device.raw().upgrade().unwrap().cmd_begin_render_pass(
+            self.device.raw().cmd_begin_render_pass(
                 frame_state.cmd_buffer,
                 &vk::RenderPassBeginInfo::builder()
                     .render_pass(self.renderpass.raw())
@@ -907,8 +904,6 @@ impl Renderer {
         unsafe {
             self.device
                 .raw()
-                .upgrade()
-                .unwrap()
                 .cmd_end_render_pass(frame_state.cmd_buffer);
         }
     }
@@ -916,12 +911,7 @@ impl Renderer {
     fn end_frame(&mut self, cmd_buffer: vk::CommandBuffer) {
         let frame_state = self.get_cur_frame_state();
         unsafe {
-            self.device
-                .raw()
-                .upgrade()
-                .unwrap()
-                .end_command_buffer(cmd_buffer)
-                .unwrap();
+            self.device.raw().end_command_buffer(cmd_buffer).unwrap();
 
             // The user should always pass the same cmdbuffer back to us after a frame
             assert_eq!(frame_state.cmd_buffer, cmd_buffer);
@@ -937,16 +927,9 @@ impl Renderer {
                 .build();
 
             let fence = &frame_state.fence;
+            self.device.raw().reset_fences(&[fence.raw()]).unwrap();
             self.device
                 .raw()
-                .upgrade()
-                .unwrap()
-                .reset_fences(&[fence.raw()])
-                .unwrap();
-            self.device
-                .raw()
-                .upgrade()
-                .unwrap()
                 .queue_submit(self.device.present_queue(), &[submit_info], fence.raw())
                 .unwrap();
 
@@ -971,10 +954,11 @@ impl Renderer {
     }
 
     fn get_device(&self) -> Arc<ash::Device> {
-        self.device.raw().upgrade().unwrap()
+        self.device.raw()
     }
-    fn get_allocator(&self) -> Weak<vk_mem::Allocator> {
-        Arc::downgrade(&self.allocator)
+
+    fn get_allocator(&self) -> AllocRef {
+        AllocRef(Arc::downgrade(&self.allocator))
     }
 
     fn get_cur_swapchain_idx(&self) -> usize {
@@ -992,11 +976,7 @@ struct ImguiRenderer {
 }
 
 impl ImguiRenderer {
-    fn new(
-        device: &VkDevice,
-        allocator: Weak<vk_mem::Allocator>,
-        context: &mut imgui::Context,
-    ) -> Result<Self> {
+    fn new(device: &VkDevice, allocator: AllocRef, context: &mut imgui::Context) -> Result<Self> {
         let font_atlas_image;
         let font_atlas_image_view;
         {
@@ -1026,7 +1006,7 @@ impl ImguiRenderer {
                 },
             )?;
             font_atlas_image_view = VkImageView::new(
-                device.raw(),
+                device.as_ref(),
                 &vk::ImageViewCreateInfo::builder()
                     .image(font_atlas_image.raw())
                     .view_type(vk::ImageViewType::TYPE_2D)
@@ -1051,13 +1031,13 @@ impl ImguiRenderer {
             )?;
 
             let cmd_pool = VkCommandPool::new(
-                device.raw(),
+                device.as_ref(),
                 &vk::CommandPoolCreateInfo::builder()
                     .queue_family_index(device.graphics_queue_family_index() as u32),
             )?;
             let cmd_buffer = cmd_pool.allocate_command_buffer(vk::CommandBufferLevel::PRIMARY)?;
             unsafe {
-                let raw_device = device.raw().upgrade().unwrap();
+                let raw_device = device.raw();
                 raw_device.begin_command_buffer(
                     cmd_buffer,
                     &vk::CommandBufferBeginInfo::builder()
