@@ -8,6 +8,9 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::{Arc, Weak};
 
+#[allow(unused_imports)]
+use tracing::{debug, error, info, info_span, instrument, span, trace, warn, Level};
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 unsafe extern "system" fn vulkan_debug_callback(
@@ -49,6 +52,7 @@ pub struct ComputePipeline {
 }
 
 impl ComputePipeline {
+    #[instrument(name = "ComputePipeline::from_glsl", level = "info", err, skip(device))]
     pub fn from_glsl(
         device: ash::Device,
         pipeline_layout: vk::PipelineLayout,
@@ -69,6 +73,7 @@ impl ComputePipeline {
         Self::from_spv(device, pipeline_layout, artifact.as_binary(), entry_point)
     }
 
+    #[instrument(name = "ComputePipeline::from_spv", level = "info", err, skip(device))]
     pub fn from_spv(
         device: ash::Device,
         pipeline_layout: vk::PipelineLayout,
@@ -199,6 +204,7 @@ pub struct VkInstance {
 }
 
 impl VkInstance {
+    #[instrument(name = "VkInstance::new", level = "info", err, skip(window))]
     pub fn new(window: &winit::window::Window, enable_validation: bool) -> Result<Self> {
         unsafe {
             let entry = ash::Entry::new()?;

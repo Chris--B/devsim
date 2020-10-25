@@ -8,5 +8,8 @@
 *.png
 imgui.ini
 
-# Misc etras
+# Logging
+/traces/*.json
+
+# Misc files
 .DS_Store

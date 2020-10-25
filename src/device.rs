@@ -7,6 +7,9 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+#[allow(unused_imports)]
+use tracing::{debug, error, info, info_span, instrument, span, trace, warn, Level};
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// Enumeration of possible device error types
@@ -43,6 +46,7 @@ pub struct Device {
 
 impl Device {
     /// Creates a new device
+    #[instrument(name = "Device::new")]
     pub fn new() -> Self {
         let bridge = ProtoBridge::new();
         Device { bridge }
@@ -54,6 +58,8 @@ impl Device {
     }
 
     /// Loads an elf into device memory from the path provided
+    #[instrument(name = "Device::load_elf", level = "info", err,
+        fields(elf_path=elf_path.as_ref().to_str().unwrap_or_default()))]
     pub fn load_elf(&mut self, elf_path: impl AsRef<Path>) -> Result<()> {
         let buffer = fs::read(elf_path)?;
         match Object::parse(&buffer)? {
@@ -129,6 +135,9 @@ impl Device {
 
     /// Dumps a snapshot of the device framebuffer into the buffer provided by the caller
     /// The buffer should be large enough to hold the data contained within the framebuffer or an error will be returned
+    #[instrument(name = "Device::dump_framebuffer", level = "info", err,
+        fields(dst = dst.len())
+    )]
     pub fn dump_framebuffer(&mut self, dst: &mut [u8]) -> Result<()> {
         let (fb_width, fb_height) = self.query_framebuffer_size()?;
         let fb_num_pixels = (fb_width * fb_height * 4) as usize;

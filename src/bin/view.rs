@@ -17,9 +17,13 @@ use winit::{
 use clap::Clap;
 use devsim::vkutil::*;
 use imgui::internal::RawWrapper;
+use std::fmt;
 use std::io;
 use std::io::Write;
 use std::slice;
+
+#[allow(unused_imports)]
+use tracing::{debug, error, info, info_span, instrument, span, trace, warn, Level};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -84,8 +88,9 @@ const NUM_TEXTURE_SLOTS: u64 = 64;
 /// Texture slot index associated with the imgui font
 const IMGUI_FONT_TEXTURE_SLOT_INDEX: u64 = NUM_TEXTURE_SLOTS - 1;
 
+#[derive(Debug)]
+#[allow(dead_code)]
 struct FrameState {
-    #[allow(dead_code)]
     fb_image_view: VkImageView,
     fb_image: VkImage,
     cmd_buffer: vk::CommandBuffer,
@@ -95,6 +100,7 @@ struct FrameState {
 }
 
 impl FrameState {
+    #[instrument(name = "FrameState::new", level = "info", err)]
     fn new(
         device: &VkDevice,
         allocator: AllocRef,
@@ -251,7 +257,21 @@ struct Renderer {
     instance: VkInstance,
 }
 
+impl fmt::Debug for Renderer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Renderer")
+            // We can't derive Debug because the allocator field doesn't impl.
+            // Anything that we want to display in a "debug fmt" of the Renderer
+            // can go here.
+            // ... not sure what to put here?
+            .field("device", &self.device)
+            .field("instance", &self.instance)
+            .finish()
+    }
+}
+
 impl Renderer {
+    #[instrument(name = "Renderer::new", level = "info", err, skip(window))]
     fn new(
         window: &winit::window::Window,
         fb_width: u32,
@@ -455,10 +475,10 @@ impl Renderer {
                 ]),
         )?;
 
-        let mut compiler = shaderc::Compiler::new().expect("Failed to create compiler");
+        let pipelines_init = info_span!("Shaders Init");
+        let pipelines_init_enter = pipelines_init.enter();
 
-        let vert_source = include_str!("../shaders/FullscreenPass.vert");
-        let frag_source = include_str!("../shaders/CopyTexture.frag");
+        let mut compiler = shaderc::Compiler::new().expect("Failed to create compiler");
         let mut compile_options = shaderc::CompileOptions::new().unwrap();
         let shader_dir = std::env::current_dir().unwrap().join("src/shaders");
         compile_options.set_include_callback(move |name, _inc_type, _parent_name, _depth| {
@@ -475,6 +495,12 @@ impl Renderer {
                 ))
             }
         });
+
+        let util_pipelines = info_span!("Loading Utility Pipelines");
+        let util_pipelines_enter = util_pipelines.enter();
+
+        let vert_source = include_str!("../shaders/FullscreenPass.vert");
+        let frag_source = include_str!("../shaders/CopyTexture.frag");
 
         let vert_result = compiler.compile_into_spirv(
             vert_source,
@@ -559,6 +585,10 @@ impl Renderer {
                 .render_pass(renderpass.raw())
                 .subpass(0),
         )?;
+
+        drop(util_pipelines_enter);
+        let imgui_pipelines = info_span!("Loading ImGUI Pipelines");
+        let imgui_pipelines_enter = imgui_pipelines.enter();
 
         let imgui_vert_source = include_str!("../shaders/ImguiTriangle.vert");
         let imgui_frag_source = include_str!("../shaders/ImguiTriangle.frag");
@@ -681,6 +711,9 @@ impl Renderer {
                 .subpass(0),
         )?;
 
+        drop(imgui_pipelines_enter);
+        drop(pipelines_init_enter);
+
         let image_available_semaphores = swapchain
             .images
             .iter()
@@ -764,6 +797,12 @@ impl Renderer {
         &self.frame_states[self.cur_swapchain_idx]
     }
 
+    #[instrument(
+        name = "Renderer::recreate_swapchain",
+        level = "info",
+        err,
+        skip(window)
+    )]
     fn recreate_swapchain(&mut self, window: &winit::window::Window) -> Result<()> {
         println!(
             "Recreating {}x{} swapchain!",
@@ -949,6 +988,7 @@ impl Renderer {
         }
     }
 
+    #[instrument(name = "Renderer::wait_for_idle", level = "info")]
     fn wait_for_idle(&self) {
         unsafe { self.get_device().device_wait_idle().unwrap() };
     }
@@ -969,6 +1009,7 @@ impl Renderer {
     }
 }
 
+#[derive(Debug)]
 struct ImguiRenderer {
     #[allow(dead_code)]
     font_atlas_image: VkImage,
@@ -976,6 +1017,7 @@ struct ImguiRenderer {
 }
 
 impl ImguiRenderer {
+    #[instrument(name = "ImguiRenderer::new", level = "info", err)]
     fn new(device: &VkDevice, allocator: AllocRef, context: &mut imgui::Context) -> Result<Self> {
         let font_atlas_image;
         let font_atlas_image_view;
@@ -1163,11 +1205,17 @@ impl ImguiRenderer {
 }
 
 fn show(opts: &SimOptions) -> ! {
-    let mut hw_device = devsim::device::Device::new();
+    let hw_init = info_span!("Hardware Init");
+    let hw_init_enter = hw_init.enter();
 
+    let mut hw_device = devsim::device::Device::new();
     hw_device
         .load_elf(&opts.elf_path)
         .expect("Failed to load elf file");
+
+    drop(hw_init_enter);
+    let window_init = info_span!("Window Init");
+    let window_init_enter = window_init.enter();
 
     let (fb_width, fb_height) = hw_device
         .query_framebuffer_size()
@@ -1184,6 +1232,10 @@ fn show(opts: &SimOptions) -> ! {
         .build(&event_loop)
         .expect("Failed to create window");
 
+    drop(window_init_enter);
+    let imgui_init = info_span!("ImGUI Init");
+    let imgui_init_enter = imgui_init.enter();
+
     let mut context = imgui::Context::create();
     context.set_renderer_name(Some(imgui::ImString::from(String::from("DevSim"))));
     context
@@ -1194,23 +1246,36 @@ fn show(opts: &SimOptions) -> ! {
     let mut platform = WinitPlatform::init(&mut context);
     platform.attach_window(context.io_mut(), &window, HiDpiMode::Default);
 
+    drop(imgui_init_enter);
+    let gfx_init = info_span!("Gfx Init");
+    let gfx_init_enter = gfx_init.enter();
+
     let mut renderer = Renderer::new(&window, fb_width, fb_height, true, &mut context)
         .expect("Failed to create renderer");
 
-    unsafe {
-        // TODO: Find a better way to initialize these vectors
-        let mut imgui_vtx_buffers = Vec::new();
-        for _i in 0..renderer.get_num_swapchain_images() {
-            imgui_vtx_buffers.push(None);
-        }
-        let mut imgui_idx_buffers = Vec::new();
-        for _i in 0..renderer.get_num_swapchain_images() {
-            imgui_idx_buffers.push(None);
-        }
+    // TODO: Find a better way to initialize these vectors
+    // Note: We don't have (or want?) Clone on VkBuffer, so this doesn't work:
+    //      vec![None; renderer.get_num_swapchain_images()]
+    let mut imgui_vtx_buffers = Vec::new();
+    for _i in 0..renderer.get_num_swapchain_images() {
+        imgui_vtx_buffers.push(None);
+    }
+    let mut imgui_idx_buffers = Vec::new();
+    for _i in 0..renderer.get_num_swapchain_images() {
+        imgui_idx_buffers.push(None);
+    }
 
-        let mut last_frame = Instant::now();
+    drop(gfx_init_enter);
+
+    let mut last_frame = Instant::now();
+    let mut frame_idx = 0;
+    unsafe {
         event_loop.run(move |event, _, control_flow| {
+            let event_loop = info_span!("Event Loop Iter", ?frame_idx,);
+            let _event_loop_enter = event_loop.enter();
+
             platform.handle_event(context.io_mut(), &window, &event);
+
             match event {
                 Event::NewEvents(StartCause::Init) => {
                     *control_flow = ControlFlow::Poll;
@@ -1227,11 +1292,17 @@ fn show(opts: &SimOptions) -> ! {
                     _ => {}
                 },
                 Event::MainEventsCleared => {
+                    let main_events = info_span!("main events cleared");
+                    let _main_events_enter = main_events.enter();
+
+                    let begin_frame = info_span!("Do Renderer `frame()`");
+                    let begin_frame_enter = begin_frame.enter();
                     let cmd_buffer = renderer.begin_frame();
 
                     let now = Instant::now();
                     context.io_mut().update_delta_time(now - last_frame);
                     last_frame = now;
+                    frame_idx += 1;
 
                     platform
                         .prepare_frame(context.io_mut(), &window)
@@ -1239,6 +1310,9 @@ fn show(opts: &SimOptions) -> ! {
 
                     let ui = context.frame();
                     // application-specific rendering *under the UI*
+
+                    let hw_device_loop = info_span!("spin hw device");
+                    let hw_device_loop_enter = hw_device_loop.enter();
 
                     // Enable the device
                     hw_device.enable();
@@ -1258,6 +1332,7 @@ fn show(opts: &SimOptions) -> ! {
                             }
                         }
                     }
+                    drop(hw_device_loop_enter);
 
                     let fb_upload_buffer = &renderer.fb_upload_buffer;
                     let p_fb_upload_buf_mem = fb_upload_buffer.info().get_mapped_data();
@@ -1360,6 +1435,8 @@ fn show(opts: &SimOptions) -> ! {
                     let frame_state = renderer.get_cur_frame_state();
                     let descriptor_set = frame_state.descriptor_set;
 
+                    let begin_render = info_span!("Do Renderer `render()`");
+                    let begin_render_enter = begin_render.enter();
                     renderer.begin_render();
 
                     device.cmd_bind_pipeline(
@@ -1653,8 +1730,10 @@ fn show(opts: &SimOptions) -> ! {
                     }
 
                     renderer.end_render();
+                    drop(begin_render_enter);
 
                     renderer.end_frame(cmd_buffer);
+                    drop(begin_frame_enter);
                 }
                 Event::LoopDestroyed => {
                     renderer.wait_for_idle();
@@ -1690,7 +1769,66 @@ struct SimOptions {
     elf_path: String,
 }
 
+// When this object is dropped, it flushes any logs that need flushing before closing the app
+#[allow(dead_code)]
+struct LogFlushGuards {
+    chrome_guard: Option<tracing_chrome::FlushGuard>,
+}
+
+fn init_logging() -> LogFlushGuards {
+    use tracing::event;
+    use tracing_subscriber::{prelude::*, registry::Registry};
+
+    let registry = Registry::default();
+
+    // Line-oriented text output to stdout
+    let registry = registry.with(tracing_subscriber::fmt::layer());
+
+    // Output for `chrome://tracing`
+    use tracing_chrome::ChromeLayerBuilder;
+
+    // Place all traces in their own folder
+    match std::fs::create_dir("./traces/") {
+        Ok(()) => {}
+        Err(err) => {
+            // Don't let this stop us from running - we're probably just on read-only storage
+            eprintln!(
+                "Failed to create traces directory, no chrome://tracing traces: {:#?}",
+                err
+            );
+        }
+    }
+    let trace_filename = format!(
+        "./traces/trace-{}.json",
+        std::time::SystemTime::UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_secs()
+    );
+
+    // Build the tracing-chrome layer
+    let (chrome_layer, guard) = ChromeLayerBuilder::new().file(trace_filename).build();
+    let registry = registry.with(chrome_layer);
+    let chrome_guard = Some(guard);
+
+    // Register our tracing subscriber
+    tracing::subscriber::set_global_default(registry)
+        .expect("Failed to install the tracing subscriber");
+
+    let logging_test = tracing::trace_span!("Logging Test");
+    let _logging_test_enter = logging_test.enter();
+
+    event!(Level::ERROR, "1/5 logging checks");
+    event!(Level::WARN, "2/5 logging checks");
+    event!(Level::INFO, "3/5 logging checks");
+    event!(Level::DEBUG, "4/5 logging checks");
+    event!(Level::TRACE, "5/5 logging checks");
+
+    LogFlushGuards { chrome_guard }
+}
+
 fn main() {
+    let _logging_guard = init_logging();
     let opts = SimOptions::parse();
     show(&opts);
 }
